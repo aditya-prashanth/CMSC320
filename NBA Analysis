@@ -1,0 +1,93 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+
+us_df = pd.read_csv("city.csv", low_memory=False)
+world_df = pd.read_csv("world.csv")
+nba_df = pd.read_csv("NBA.csv")
+
+nba_df['city'] = nba_df['City'].dropna()
+nba_df = nba_df[['city', '022/2023 Revenue (millions)']]
+us_df = us_df.drop(['township', 'timezone','ranking','zips','id', 'city_ascii', 'city_alt', 'state_id', 'state_name', 'county_fips', 'county_name', 'county_fips_all', 'county_name_all', 'cbsa_name', 'csa_name', 'cbsa_fips', 'csa_fips'], axis=1)
+
+def clean_dataset(df):
+    # Identifying numerical columns (int64 and float64 are common numerical types in pandas)
+    numerical_cols = df.select_dtypes(include=['int64', 'float64']).columns
+
+    # Identifying other columns
+    other_cols = df.select_dtypes(exclude=['int64', 'float64']).columns
+
+    # Filling missing values in numerical columns with their mean
+    df[numerical_cols] = df[numerical_cols].apply(lambda x: x.fillna(x.mean()))
+
+    # Filling missing values in other columns with their mode
+    for column in other_cols:
+        df[column] = df[column].fillna(df[column].mode()[0])
+
+    return df
+
+us_df = clean_dataset(us_df)
+merged_df = pd.merge(nba_df, us_df, on='city')
+merged_df['city'] = merged_df['city'].drop_duplicates()
+merged_df = merged_df.dropna(subset='city')
+
+X = merged_df.drop('022/2023 Revenue (millions)', axis=1)
+y = merged_df['022/2023 Revenue (millions)']
+
+categorical_features_indices = np.where(X.dtypes != float)[0]
+
+from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+from catboost import CatBoostRegressor
+
+# Initialize the CatBoostRegressor
+model = CatBoostRegressor(cat_features=categorical_features_indices, iterations=1000, learning_rate=0.1, depth=10)
+
+# Train the model
+model.fit(X_train, y_train, eval_set=(X_test, y_test), plot=True, verbose=100)
+
+from sklearn.metrics import r2_score, mean_absolute_error
+
+predictions = model.predict(X_test)
+print(f"R2 Score: {r2_score(y_test, predictions)}")
+print(f"Mean Absolute Error: {mean_absolute_error(y_test, predictions)}")
+
+# Get feature importances
+feature_importances = model.get_feature_importance()
+feature_names = X_train.columns
+
+# Combine feature names and their importance scores
+features = pd.DataFrame({'Feature': feature_names, 'Importance': feature_importances})
+
+# Sort the features by importance
+sorted_features = features.sort_values(by='Importance', ascending=False)
+
+# Print the sorted features
+print(sorted_features.head(20))
+
+# Generate predictions for the entire dataset
+# Note: Make sure `merged_df` only contains the features used for training and is properly preprocessed
+all_predictions = model.predict(us_df)
+
+# Add these predictions as a new column to `merged_df`
+us_df['predicted_revenue'] = all_predictions
+
+# Now sort `merged_df` by 'predicted_revenue' in descending order to get those with the highest likelihood of having the highest revenue at the top
+sorted_df = us_df.sort_values(by='predicted_revenue', ascending=False)
+
+# If you want to view the sorted DataFrame
+print(sorted_df['city'].head(20))
+
+nba_cities = nba_df['city'].unique()
+
+# Step 2: Filter 'cities_df' to exclude rows where the city name appears in 'nba_cities'
+filtered_cities_df = sorted_df[~sorted_df['city'].isin(nba_cities)]
+
+print(filtered_cities_df['city'].head(50))
+
+print(filtered_cities_df.sort_values(''))
+
+
+
